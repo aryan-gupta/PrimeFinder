@@ -1,0 +1,310 @@
+/* 
+ * Copyright (c) The Gupta Empire - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ *
+ * Written by Aryan Gupta <me@theguptaempire.net>
+ * 
+ * ==========================================
+ * @author Aryan Gupta
+ * @project Prime Finder
+ * @title Prime Finder Using Multiple Ways
+ * @date 2017-02-12 (YYYY-MM-DD)
+ * @version 5.3
+ * @description Finds prime numbers by multithreading using sections,
+ * 				multithreading using single numbers, by single threading,
+ * 				also tests if a number is prime, and finds the next 
+ *				prime number
+ * ==========================================
+ */
+ 
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+#include <chrono>
+#include <stdlib.h>
+
+#if (defined (LINUX) || defined (__linux__))
+	#include <thread>
+	#include <mutex>
+	#include <condition_variable>
+#elif (defined (_WIN32) || defined (_WIN64))
+	#undef _GLIBCXX_HAS_GTHREADS
+	#include <mutex>
+	#include "mingw.thread.h"
+	#include "mingw.mutex.h"
+	#include "mingw.condition_variable.h"
+	#include <atomic>
+	#include <assert.h>
+#endif
+
+int NUM_OF_THREADS = 2; // stores the number of threads the program is going to use
+bool dP = false; // should we display the found primes
+bool dAll = false; // shoudl we display primes after each meathod
+const long START = 2; // where to start when looking for primes
+long END   = 10000; // where to end looking for primes
+
+struct ReturnData {
+	long primesFound = 0;
+	double time = 0;
+	bool isPrime = false;
+	unsigned long long nextPrime = 0;
+};
+
+struct parseInfo {
+	bool testSpecificPrime = false;
+	bool findNextPrime = false;
+	unsigned long long testNum = 0;
+};
+
+
+/*
+namespace SpecificNumber {
+	ReturnData run(long s) {
+		ReturnData s;
+		return s;
+	}
+}
+//*/
+// /*
+namespace NextPrime {
+	using std::vector;
+	using std::cout;
+	using std::endl;
+	using std::thread;
+	using std::mutex;
+	
+	unsigned long long numTesting;
+	std::vector<bool> threadFinished(NUM_OF_THREADS, false);
+	std::vector<bool> isPotentialPrime(NUM_OF_THREADS, true);
+	
+	std::condition_variable continueWork;
+	mutex test;
+	
+	mutex mtx_testIfFound;
+	mutex mtx_finished;
+	mutex mtx_cout;
+	mutex mtx_isPP;
+	
+	bool testForPrime(const unsigned long start, const unsigned long end) {
+		for(unsigned int i = start; i < end; ++i) {
+			if(i < 2) i = 2;
+			if(numTesting % i == 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+	
+	bool otherThreadsFinished(/*int id*/) {
+		int f = 0;
+		//cout << "threadFinished ARRAY:" << threadFinished[0] << threadFinished[1] << threadFinished[2] << threadFinished[3] << endl;
+		for(int i = 0; i < NUM_OF_THREADS; ++i) {
+			f += threadFinished[i];
+		}
+		if(f == 4)
+			return true;
+		return false;
+	}
+	
+	void resetThread(int id) {
+		mtx_finished.lock();
+		threadFinished[id] = false;
+		mtx_finished.unlock();
+		mtx_isPP.lock();
+		isPotentialPrime[id] = false;
+		mtx_isPP.unlock();
+	}
+	
+	void threadPool(int id) {
+		while(true) {
+			resetThread(id);
+			
+			long distance = numTesting / NUM_OF_THREADS;
+			
+			mtx_cout.lock();
+			cout << "ID: " << id << " testing " << numTesting << " from " << distance * id << " to " << distance * (id + 1) << endl;
+			mtx_cout.unlock();
+			
+			// MAIN FUNCTIONAL CORE
+			bool PP = testForPrime(distance * id, distance * (id + 1));
+			
+			mtx_isPP.lock();
+			isPotentialPrime[id] = PP;
+			mtx_isPP.unlock();
+			
+			mtx_cout.lock();
+			cout << "ID: " << id << " calculated " << numTesting << (isPotentialPrime[id]? " is not a prime":" could be a prime") << endl;
+			mtx_cout.unlock();
+			
+			long temp = numTesting;
+			
+			mtx_cout.lock();
+			cout << "ID: " << id << " waiting for other threads to finish " << endl;
+			mtx_cout.unlock();
+			
+			mtx_finished.lock();
+			threadFinished[id] = true;
+			mtx_finished.unlock();
+			
+			
+			std::unique_lock<mutex> lk(test);
+			continueWork.notify_all();
+			continueWork.wait(lk, otherThreadsFinished);
+			continueWork.notify_all();
+			/*
+			while(!otherThreadsFinished()) {
+				mtx_cout.lock();
+				cout << "ID: " << id << " starting sleep with " << temp << endl;
+				mtx_cout.unlock();
+				//std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			}
+			/*
+			std::unique_lock<mutex> lk(test);
+			continueWork.notify_all();
+			continueWork.wait_for(lk, std::chrono::milliseconds(50000), otherThreadsFinished);
+			continueWork.notify_all();
+			/*
+			//continueWork.notify_all();
+			while(!otherThreadsFinished()) {
+				continueWork.wait(lk);
+				//continueWork.notify_all();
+			}
+			//*/
+			
+			mtx_cout.lock();
+			cout << "ID: " << id << " states that all other threads are finished " << endl;
+			mtx_cout.unlock();
+			
+			mtx_testIfFound.lock();
+			if(numTesting == temp) {
+				mtx_cout.lock();
+				cout << "ID: " << id << " finishing up number test" << endl;
+				mtx_cout.unlock();
+				
+				int f = 0;
+				for(int i = 0; i < NUM_OF_THREADS; ++i)
+					f += isPotentialPrime[i];
+				if(f == 4) {
+					mtx_cout.lock();
+					cout << "ID: " << id << " calculated " << numTesting << " is a Prime... ending" << endl;
+					mtx_cout.unlock();
+					mtx_testIfFound.unlock();	
+					break;
+				} else {
+					mtx_cout.lock();
+					cout << "ID: " << id << " calculated " << numTesting << " is not a Prime... continuing to " << numTesting + 1 << endl;
+					mtx_cout.unlock();
+				}
+				numTesting++;
+			}
+			mtx_testIfFound.unlock();
+		}
+	}
+	
+	ReturnData run(unsigned long long tester) {
+		using namespace std::chrono;
+		using namespace std;
+		
+		vector<thread> threads; // vector storing threads
+		
+		threads.reserve(NUM_OF_THREADS + 5);
+		
+		numTesting = tester;
+		
+		auto startTime = steady_clock::now();
+		for(int i = 0; i < NUM_OF_THREADS; ++i)
+			threads.push_back(thread(threadPool, i));
+
+		for(auto& t: threads) t.join();
+		
+		auto endTime = steady_clock::now();
+		auto diff = endTime - startTime;
+		auto nseconds = double(diff.count()) * steady_clock::period::num / steady_clock::period::den;
+		
+		if(dAll) {
+			cout << "Primes: ";
+			//displayPrimes();
+			cout << endl;
+		}
+		
+		ReturnData data;
+		data.nextPrime = numTesting;
+		data.time = nseconds;
+		
+		return data;
+	}
+}
+//*/
+void helpText() {
+	using std::cout;
+	using std::endl;
+	cout << "HELP TEXT:\n\n" << "Parameter\tDefault\tDetails" << endl;
+	cout << "-t <arg>\t" << NUM_OF_THREADS << "\t1st argument is number of threads\n"
+		 << "-e <arg>\t" << END            << "\t2nd argument is the maximum number\n"
+		 << "-d \t"      << dP             << "\t3rd argument is whether to displayt the found primes\n"
+		 << "-dall \t"   << dAll           << "\t4th argument is whether to primes from all threads\n" << endl << endl;
+		 
+	cout << "Example: .\\PrimeFinder.exe -t 7 -e 500000 -d -dall" << endl;
+		 
+	exit(1);
+}
+
+parseInfo parse(int argc, char* argv[]) {
+	parseInfo info;
+	for(int i = 1; i < argc; ++i) {
+		if       (strcmp(argv[i],"-t") == 0) {
+			NUM_OF_THREADS = atoi(argv[i + 1]);
+			i++;
+		} else if(strcmp(argv[i], "-e") == 0) {
+			END = static_cast<long>(atoi(argv[i + 1]));
+			i++;
+		} else if(strcmp(argv[i], "-r") == 0) {
+			info.testNum = static_cast<unsigned long long>(atoll(argv[i + 1]));
+			//info.testSpecificPrime = true;
+			info.findNextPrime = true;
+			i++;
+		} else if(strcmp(argv[i], "-d") == 0) {
+			dP = true;
+		} else if(strcmp(argv[i], "-dall") == 0) {
+			dAll = true;
+		} else if(strcmp(argv[i], "/?") == 0 || strcmp(argv[i], "-?") == 0 )
+			helpText();
+		else
+			helpText();
+	}
+	return info;
+}
+
+int main(int argc, char* argv[]) {
+	using namespace std;
+	
+	parseInfo info = parse(argc, argv);
+	
+	/*if(info.testSpecificPrime) {
+		cout << "Testing " << info.testNum << endl;
+		ReturnData SN = SpecificNumber::run(info.testNum);
+		cout << info.testNum << " is " << ((SN.isPrime)? "":"not") <<" a prime. " << "It took " << NUM_OF_THREADS << " cores " << SN.time << " seconds to caculate." << endl << endl;	
+	} else */if (info.findNextPrime) { 
+		cout << "Finding next prime after " << info.testNum << endl;
+		ReturnData NP = NextPrime::run(info.testNum);
+		cout << NP.nextPrime << " is the next prime after " << info.testNum << "It took " << NUM_OF_THREADS << " cores " << NP.time << " seconds to caculate." << endl << endl;
+	} else {
+		// Single Thread
+		cout << "Running Single Thread: \n";
+		ReturnData ST = SThreaded::run();
+		cout << ST.primesFound << " primes found between " << START << " and " << END << " using " << 1 << " cores in " << ST.time << " seconds." << endl << endl;	
+		// Multi Thread using sections
+		cout << "Running Multi Thread by Sections: \n";
+		ReturnData MTBS = MThreaded::bySection::run();
+		cout << MTBS.primesFound << " primes found between " << START << " and " << END << " using " << NUM_OF_THREADS << " cores in " << MTBS.time << " seconds." << endl << endl;
+		// Multi Thread using individual numbers or a thread pool
+		cout << "Running Multi Thread by Individual Numbers (thread pool): \n";
+		ReturnData MTBN = MThreaded::byNumber::run();
+		cout << MTBN.primesFound << " primes found between " << START << " and " << END << " using " << NUM_OF_THREADS << " cores in " << MTBN.time << " seconds." << endl << endl;
+	}
+	
+	if(!dAll && dP) {
+		MThreaded::byNumber::displayPrimes();
+	}
+}
