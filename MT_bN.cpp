@@ -20,93 +20,81 @@
 #include <vector>
 #include <chrono>
 #include <stdlib.h>
-
-#if (defined (LINUX) || defined (__linux__))
-	#include <thread>
-	#include <mutex>
-	#include <condition_variable>
-#elif (defined (_WIN32) || defined (_WIN64))
-	#include ".\h\mingw.thread.h"
-	#include ".\h\mingw.mutex.h"
-#endif
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 #include ".\h\global.h"
 #include ".\h\MT_bN.h"
 
-typedef unsigned long long ull;
+using ull = unsigned long long;
 
-namespace MThreaded {
-	namespace byNumber {
-		std::mutex testing;
-		std::mutex found;
-		std::vector<ull> foundPrimes;
-		std::vector<ull> testedPrimes(1, START - 1);
+namespace MThreaded::byNumber {
 
-		bool testForPrime(const ull num) {
-			for(ull i = 2; i < num; ++i) {
-				if(num % i == 0) {
-					return false;
-				}
-			}
-			return true;
+std::mutex found;
+std::vector<ull> foundPrimes;
+std::atomic<ull> lastTested;
+
+bool testForPrime(const ull num) {
+	for(ull i = 2; i < num / 2 + 1; ++i) {
+		if(num % i == 0) {
+			return false;
 		}
+	}
+	return true;
+}
 
-		void lookForPrimes() {
-			while(true) {
-				testing.lock();
-				ull num = testedPrimes.back() + 1;
-				testedPrimes.push_back(num);
-				testing.unlock();
-				
-				if(num > END)
-					break;
-				
-				if(testForPrime(num)) {
-					found.lock();
-					foundPrimes.push_back(num);
-					found.unlock();
-				}
-			}
+void lookForPrimes() {
+	while(true) {
+		ull num = lastTested.fetch_add(1, std::memory_order_relaxed);
+		
+		if(num > END)
+			break;
+		
+		if(testForPrime(num)) {
+			std::scoped_lock lk{ found }
+			foundPrimes.push_back(num);
 		}
-
-		void displayPrimes() {
-			std::cout << std::endl;
-			for(auto& v: foundPrimes) {
-				std::cout << v << "\t";
-			}
-		}
-
-		ReturnData run() {
-			using namespace std::chrono;
-			using namespace std;
-			
-			vector<thread> threads; // vector storing threads
-			
-			threads.reserve(NUM_OF_THREADS);
-			foundPrimes.reserve(END + 100);
-			
-			auto startTime = steady_clock::now();
-			for(int i = 0; i < NUM_OF_THREADS; ++i)
-				threads.push_back(thread(lookForPrimes));
-
-			for(auto& t: threads) t.join();
-			
-			auto endTime = steady_clock::now();
-			auto diff = endTime - startTime;
-			auto nseconds = double(diff.count()) * steady_clock::period::num / steady_clock::period::den;
-			
-			if(dAll) {
-				cout << "Primes: ";
-				displayPrimes();
-				cout << endl;
-			}
-			
-			ReturnData data;
-			data.primesFound = foundPrimes.size();
-			data.time = nseconds;
-			
-			return data;
-		}
-
 	}
 }
+
+void displayPrimes() {
+	std::cout << std::endl;
+	for(auto& v: foundPrimes) {
+		std::cout << v << "\t";
+	}
+}
+
+ReturnData run() {
+	using namespace std::chrono;
+	using namespace std;
+	
+	vector<thread> threads; // vector storing threads
+	foundPrimes.reserve(END);
+	
+	auto startTime = steady_clock::now();
+	for(int i = 0; i < NUM_OF_THREADS; ++i)
+		threads.emplace_back(lookForPrimes);
+
+	for(auto& t: threads) t.join();
+	
+	auto endTime = steady_clock::now();
+	auto diff = endTime - startTime;
+	auto nseconds = duration_cast<milli>(diff).count();
+	
+	if(dAll) {
+		cout << "Primes: ";
+		displayPrimes();
+		cout << endl;
+	}
+	
+	ReturnData data;
+	data.primesFound = foundPrimes.size();
+	data.time = nseconds;
+	
+	return data;
+}
+
+
+} // end namespace MThreaded::byNumber
