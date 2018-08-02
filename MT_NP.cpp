@@ -36,131 +36,111 @@ using std::endl;
 using std::thread;
 using std::mutex;
 
+constexpr bool DEBUG = true;
+
+std::atomic_bool stopAllThreads = false;
+std::atomic_bool foundNextPrime = false;
+
+
+
 ull numTesting;
 vector<bool> threadFinished(NUM_OF_THREADS, false);
 vector<bool> isPotentialPrime(NUM_OF_THREADS, true);
 
+std::atomic_flag calcDone = ATOMIC_FLAG_INIT;
+
 std::condition_variable continueWork;
-mutex test;
+mutex cw_lock;
 
-mutex mtx_testIfFound;
-mutex mtx_finished;
+std::condition_variable startWork;
+mutex sw_lock;
+std::atomic_int waiting;
+
 mutex mtx_cout;
-mutex mtx_isPP;
 
-bool testForPrime(const ull start, const ull end) {
+std::pair<bool, bool> testForPrime(const ull start, const ull end, std::atomic_bool& stop) {
+	// First return value is if its a prime in that interval, second is if it was a premature
+	// stop, Dont know why we need it but, hey....
 	for(unsigned int i = start; i < end; ++i) {
+		if (stop.load(std::memory_order_relaxed)) return {false, true};
+		
 		if(i < 2) i = 2;
+		
 		if(numTesting % i == 0) {
-			return false;
+			stop.store(true, std::memory_order_relaxed);
+			return {false, false};
 		}
+	}
+	return {true, false};
+}
+
+template <typename T>
+bool isArraySame(const T& arr, const bool val) {
+	for(auto b : arr) {
+		if (b != val)
+			return false;
 	}
 	return true;
 }
 
-bool otherThreadsFinished(/*int id*/) {
-	int f = 0;
-	//cout << "threadFinished ARRAY:" << threadFinished[0] << threadFinished[1] << threadFinished[2] << threadFinished[3] << endl;
-	for(int i = 0; i < NUM_OF_THREADS; ++i) {
-		f += threadFinished[i];
-	}
-	if(f == 4)
-		return true;
-	return false;
-}
-
 void resetThread(int id) {
-	mtx_finished.lock();
 	threadFinished[id] = false;
-	mtx_finished.unlock();
-	mtx_isPP.lock();
 	isPotentialPrime[id] = false;
-	mtx_isPP.unlock();
 }
 
 void threadPool(int id) {
-	while(true) {
+	while(true) {		
+		std::unique_lock lk{ sw_lock };
 		resetThread(id);
+		// This waits until all the threads have set their bool flag to false. 
+		// The first time this is run, this has no effect because the flag is already
+		// false, however after the first run it will work as a barier, that waits
+		// for all the threads to reach here ('starting point'). There is another wait
+		// at the end that guarentees that all the flags are set as true. Also this does
+		// not set 
+		startWork.wait(lk, [&]{ return isArraySame(threadFinished, false); });
+		startWork.notify_all();
+		lk.unlock();
 		
 		long distance = numTesting / NUM_OF_THREADS;
 		
-		mtx_cout.lock();
-		cout << "ID: " << id << " testing " << numTesting << " from " << distance * id << " to " << distance * (id + 1) << endl;
-		mtx_cout.unlock();
+		if constexpr (DEBUG) {
+			mtx_cout.lock();
+			cout << "ID: " << id << " testing " << numTesting << " from " << distance * id << " to " << distance * (id + 1) << endl;
+			mtx_cout.unlock();
+		}
 		
-		// MAIN FUNCTIONAL CORE
-		bool PP = testForPrime(distance * id, distance * (id + 1));
+		auto [PP, PS] = testForPrime(distance * id, distance * (id + 1), stopAllThreads);
 		
-		mtx_isPP.lock();
-		isPotentialPrime[id] = PP;
-		mtx_isPP.unlock();
+		isPotentialPrime[id] = PP; // each thread is accessing different locations, its fine
 		
-		mtx_cout.lock();
-		cout << "ID: " << id << " calculated " << numTesting << (isPotentialPrime[id]? " is not a prime":" could be a prime") << endl;
-		mtx_cout.unlock();
+		if constexpr (DEBUG) {
+			mtx_cout.lock();
+			cout << "ID: " << id << " calculated " << numTesting << (isPotentialPrime[id]? " is not a prime":" could be a prime") << endl;
+			mtx_cout.unlock();
+		}
 		
-		long temp = numTesting;
-		
-		mtx_cout.lock();
-		cout << "ID: " << id << " waiting for other threads to finish " << endl;
-		mtx_cout.unlock();
-		
-		mtx_finished.lock();
 		threadFinished[id] = true;
-		mtx_finished.unlock();
 		
-		
-		std::unique_lock<mutex> lk(test);
-		continueWork.notify_all();
-		continueWork.wait(lk, otherThreadsFinished);
-		continueWork.notify_all();
-		/*
-		while(!otherThreadsFinished()) {
+		if constexpr (DEBUG) {
 			mtx_cout.lock();
-			cout << "ID: " << id << " starting sleep with " << temp << endl;
+			cout << "ID: " << id << " waiting for other threads to finish " << endl;
 			mtx_cout.unlock();
-			//std::this_thread::sleep_for(std::chrono::milliseconds(100));
-		}
-		/*
-		std::unique_lock<mutex> lk(test);
-		continueWork.notify_all();
-		continueWork.wait_for(lk, std::chrono::milliseconds(50000), otherThreadsFinished);
-		continueWork.notify_all();
-		/*
-		//continueWork.notify_all();
-		while(!otherThreadsFinished()) {
-			continueWork.wait(lk);
-			//continueWork.notify_all();
-		}
-		//*/
+		}	
 		
-		mtx_cout.lock();
-		cout << "ID: " << id << " states that all other threads are finished " << endl;
-		mtx_cout.unlock();
+		std::unique_lock lk(test);
+		continueWork.wait(lk, [&]{ return isArraySame(threadFinished, true); });
+		lk.unlock();
+		continueWork.notify_all();
 		
-		mtx_testIfFound.lock();
-		if(numTesting == temp) {
-			mtx_cout.lock();
-			cout << "ID: " << id << " finishing up number test" << endl;
-			mtx_cout.unlock();
-			
-			int f = 0;
-			for(int i = 0; i < NUM_OF_THREADS; ++i)
-				f += isPotentialPrime[i];
-			if(f == 4) {
-				mtx_cout.lock();
-				cout << "ID: " << id << " calculated " << numTesting << " is a Prime... ending" << endl;
-				mtx_cout.unlock();
-				mtx_testIfFound.unlock();	
-				break;
+		if (!calcDone.test_and_set(std::memory_order_relaxed)) {
+			if (PS) {
+				numTesting++;
 			} else {
-				mtx_cout.lock();
-				cout << "ID: " << id << " calculated " << numTesting << " is not a Prime... continuing to " << numTesting + 1 << endl;
-				mtx_cout.unlock();
+				if (isArraySame(isPotentialPrime, true))
+					
 			}
-			numTesting++;
 		}
-		mtx_testIfFound.unlock();
 	}
 }
 
